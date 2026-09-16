@@ -18,7 +18,7 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tq
 collected_articles = []
 
 try:
-    # 구글 시트에서 기자 명단 읽어오기 (UTF-8 인코딩 처리)
+    # 구글 시트에서 기자 명단 읽어오기
     reporters_df = pd.read_csv(SHEET_URL)
     
     for _, row in reporters_df.iterrows():
@@ -29,7 +29,7 @@ try:
         if not name or name == 'nan':
             continue
             
-        # [수정 포인트] 한글 검색어 전체를 안전하게 URL 인코딩 변환
+        # 한글 검색어 URL 인코딩 처리
         raw_query = f'"{name}" ({keywords})'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
@@ -44,13 +44,17 @@ try:
                 "link": entry.link
             })
 
-    # 이메일 전송
+    # 이메일 전송 처리 (한글 인코딩 보장)
     if collected_articles and SENDER_EMAIL and SENDER_PASSWORD:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 기자 명단 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
+        
+        # 제목 한글 처리
+        subject_text = f"[일일 모니터링] 기자 명단 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
+        msg['Subject'] = subject_text
 
+        # 본문 한글 처리 (utf-8 지정)
         body = "오늘 수집된 기자별 신규 기사 목록입니다:\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['media']} {item['reporter']} 기자] {item['title']}\n   링크: {item['link']}\n\n"
@@ -60,7 +64,9 @@ try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+        
+        # [핵심 수정] as_bytes()를 사용해 이메일을 utf-8 바이너리로 안전하게 전송
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
         print(f"성공: 총 {len(collected_articles)}건의 기사 브리핑 이메일 발송 완료!")
     else:
