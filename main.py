@@ -11,15 +11,16 @@ SENDER_EMAIL = os.environ.get("MY_EMAIL")
 SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"  # 알림받을 이메일 주소
 
-# 2. 구글 시트 ID 연동
+# 2. 구글 시트 ID 연동 ('기자명단' 탭 이름을 URL 안에서 퍼센트 인코딩 처리)
 SPREADSHEET_ID = "1WBUcXZ0Sj9UJMo_vzlkNhFdbsNLDroaK81f0OiKnyX0"
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=기자명단"
+SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
 
 collected_articles = []
 
 try:
-    # 구글 시트에서 기자 명단 읽어오기
-    reporters_df = pd.read_csv(SHEET_URL)
+    # 구글 시트에서 기자 명단 읽어오기 (UTF-8 지정)
+    reporters_df = pd.read_csv(SHEET_URL, encoding='utf-8')
     
     for _, row in reporters_df.iterrows():
         media = str(row.get('언론사', '')).strip()
@@ -29,7 +30,7 @@ try:
         if not name or name == 'nan':
             continue
             
-        # 한글 검색어 URL 인코딩 처리
+        # 구글 뉴스 검색어 조합 및 인코딩
         raw_query = f'"{name}" ({keywords})'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
@@ -44,28 +45,26 @@ try:
                 "link": entry.link
             })
 
-    # 이메일 전송 처리 (한글 인코딩 보장)
+    # 이메일 전송 처리 (한글 안전 보장)
     if collected_articles and SENDER_EMAIL and SENDER_PASSWORD:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
         
-        # 제목 한글 처리
         subject_text = f"[일일 모니터링] 기자 명단 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
         msg['Subject'] = subject_text
 
-        # 본문 한글 처리 (utf-8 지정)
         body = "오늘 수집된 기자별 신규 기사 목록입니다:\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['media']} {item['reporter']} 기자] {item['title']}\n   링크: {item['link']}\n\n"
 
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        # UTF-8 인코딩 객체 생성
+        text_part = MIMEText(body, 'plain', 'utf-8')
+        msg.attach(text_part)
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        
-        # [핵심 수정] as_bytes()를 사용해 이메일을 utf-8 바이너리로 안전하게 전송
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
         print(f"성공: 총 {len(collected_articles)}건의 기사 브리핑 이메일 발송 완료!")
