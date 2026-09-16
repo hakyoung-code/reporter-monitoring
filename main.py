@@ -6,19 +6,19 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# 1. 환경 변수 (GitHub Secrets에서 불러옴)
+# 1. 환경 변수 (GitHub Secrets)
 SENDER_EMAIL = os.environ.get("MY_EMAIL")
 SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"  # 알림받을 이메일 주소
 
-# 2. 구글 시트 ID 연동 (아까 생성된 시트 ID)
+# 2. 구글 시트 ID 연동
 SPREADSHEET_ID = "1WBUcXZ0Sj9UJMo_vzlkNhFdbsNLDroaK81f0OiKnyX0"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=기자명단"
 
 collected_articles = []
 
 try:
-    # 구글 시트에서 기자 100명 명단 읽어오기
+    # 구글 시트에서 기자 명단 읽어오기 (UTF-8 인코딩 처리)
     reporters_df = pd.read_csv(SHEET_URL)
     
     for _, row in reporters_df.iterrows():
@@ -29,9 +29,9 @@ try:
         if not name or name == 'nan':
             continue
             
-        # 구글 뉴스 RSS 검색 키워드 조합
-        query = f'"{name}" ({keywords})'
-        encoded_query = urllib.parse.quote(query)
+        # [수정 포인트] 한글 검색어 전체를 안전하게 URL 인코딩 변환
+        raw_query = f'"{name}" ({keywords})'
+        encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
         feed = feedparser.parse(rss_url)
@@ -55,7 +55,7 @@ try:
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['media']} {item['reporter']} 기자] {item['title']}\n   링크: {item['link']}\n\n"
 
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
