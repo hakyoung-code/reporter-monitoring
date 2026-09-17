@@ -34,13 +34,10 @@ TFIDF_THRESHOLD = 0.72       # 코사인 유사도 기준 (72% 이상)
 SENTENCE_HIT_MIN = 2         # 보도자료 고유 문장 일치 개수 (최소 2개)
 MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 
-# 공단/건보 연관성 판별 필수 키워드 (채용, 신규직원, 모집 추가)
+# 공단/건보 연관성 판별 필수 키워드 (요청 키워드 5종 추가 완료)
 NHIS_CORE_KEYWORDS = [
-    "건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료", 
-    "장기요양", "공단", "수가", "약가", "급여", "신약", "등재", "약제", "의료",
-    "노인", "복지", "돌봄", "이사장", "협력", "비급여",
-    "포상금", "부당청구", "신고", "적발", "환수", "체납", "보도자료",
-    "채용", "신규직원", "공개채용", "모집", "원서접수"
+    "건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료", "장기요양", "공단", "수가", "약가", "급여",
+    "통합돌봄", "부과체계", "완납증명서", "의료비", "보건의료"
 ]
 
 collected_articles = []
@@ -105,8 +102,20 @@ def fetch_full_text(url):
         pass
     return None
 
+def is_reporter_in_title(reporter_name, title):
+    """ 제목에 기자 이름이 직접 포함된 경우 필터링 (예: '[이혜인 기자]', '이혜인 기자 =') """
+    if not reporter_name:
+        return False
+    patterns = [
+        f"{reporter_name} 기자",
+        f"{reporter_name}기자",
+        f"[{reporter_name}]",
+        f"({reporter_name})"
+    ]
+    return any(p in title for p in patterns)
+
 def is_nhis_related(text):
-    """ 공단/건보 정책 연관성 매칭 검증 """
+    """ 우리 회사(공단/건보) 관련 핵심 키워드가 1개 이상 들어있는지 확인 """
     return any(kw in text for kw in NHIS_CORE_KEYWORDS)
 
 def check_press_release_usage(article_text, press_list):
@@ -178,7 +187,7 @@ def analyze_article(title, summary_raw, link, press_list):
         base_type = "기고/오피니언"
     elif any(k in text for k in ["사설", "기획", "추적", "심층"]):
         base_type = "기획/사설"
-    elif is_press_used or any(k in text for k in ["보도자료", "알림", "밝혔다", "배포", "설명했다", "발표했다", "전했다", "포상금", "공개채용", "원서접수"]):
+    elif is_press_used or any(k in text for k in ["보도자료", "알림", "밝혔다", "배포", "설명했다", "발표했다", "전했다"]):
         if is_press_used:
             base_type = f"보도자료 기반 (유사도 {sim_percent}% / 문장일치 {hit_count}건)"
         else:
@@ -190,8 +199,8 @@ def analyze_article(title, summary_raw, link, press_list):
         article_type = base_type
 
     # 4. 감정 분석
-    pos_keywords = ["호조", "성장", "수상", "최대 실적", "흑자", "신기록", "돌파", "협약", "선정", "기부", "호평", "확대", "출시", "포상", "채용"]
-    neg_keywords = ["논란", "리콜", "소송", "적자", "하락", "부진", "제재", "과징금", "압수수색", "사고", "결함", "구설", "해임", "의혹", "부당청구"]
+    pos_keywords = ["호조", "성장", "수상", "최대 실적", "흑자", "신기록", "돌파", "협약", "선정", "기부", "호평", "확대", "출시"]
+    neg_keywords = ["논란", "리콜", "소송", "적자", "하락", "부진", "제재", "과징금", "압수수색", "사고", "결함", "구설", "해임", "의혹"]
     
     pos_score = sum(1 for k in pos_keywords if k in text)
     neg_score = sum(1 for k in neg_keywords if k in text)
@@ -205,41 +214,39 @@ def analyze_article(title, summary_raw, link, press_list):
 
     # 5. 세부 카테고리 판별
     category = "보건복지 일반"
-    if any(k in text for k in ["채용", "신규직원", "공개채용", "원서접수"]):
-        category = "인사/채용 공고"
-    elif "부당청구" in text or "신고" in text or "포상금" in text or "특사경" in text:
-        category = "의료지원 / 수사·환수"
-    elif "장기요양" in text or "요양" in text or "노인" in text or "돌봄" in text:
-        category = "장기요양보험"
-    elif "건강보험" in text or "건보" in text:
+    if "통합돌봄" in text or "장기요양" in text or "요양" in text:
+        category = "장기요양 / 통합돌봄"
+    elif "부과체계" in text or "부과" in text or "재정" in text:
+        category = "보험료/부과체계"
+    elif "완납증명서" in text or "징수" in text or "체납" in text:
+        category = "자격/징수 관리"
+    elif "의료비" in text or "수가" in text or "약가" in text:
+        category = "급여/의료비 관리"
+    elif "건강보험" in text or "건보" in text or "보건의료" in text:
         category = "건강보험 정책"
-    elif "수가" in text or "약가" in text or "신약" in text or "비급여" in text:
-        category = "급여/수가 관리"
-    elif "재정" in text or "부과" in text:
-        category = "보험료/재정 관리"
 
-    # 6. [조직도 기반] 공단 연관 부서/업무 정밀 매핑
+    # 6. [조직도 기반] 공단 연관 부서/업무 정밀 매핑 (신규 키워드 추가 매핑)
     department = "기획조정실 / 홍보실"
-    if any(k in text for k in ["채용", "신규직원", "공개채용", "원서접수", "인사"]):
-        department = "인력지원실 / 인사혁신실"
-    elif any(k in text for k in ["부당청구", "포상금", "신고", "사무장병원", "특사경", "재난적의료비", "의료급여"]):
-        department = "의료지원실"
-    elif any(k in text for k in ["약가", "신약", "약제", "등재"]):
-        department = "약제관리실"
-    elif any(k in text for k in ["부과", "자격", "소득정산"]):
+    if "통합돌봄" in text:
+        department = "통합돌봄실"
+    elif "부과체계" in text or any(k in text for k in ["부과", "자격", "소득정산"]):
         department = "자격부과실"
-    elif any(k in text for k in ["징수", "건보료", "보험료", "체납"]):
+    elif "완납증명서" in text or any(k in text for k in ["징수", "건보료", "보험료", "체납"]):
         department = "통합징수실"
-    elif any(k in text for k in ["수가", "수가협상", "급여", "적정진료"]):
+    elif "의료비" in text or any(k in text for k in ["사무장병원", "특사경", "재난적의료비", "의료급여"]):
+        department = "의료지원실 / 급여관리실"
+    elif "보건의료" in text:
+        department = "보건의료자원실 / 기획조정실"
+    elif any(k in text for k in ["약가", "신약", "약제"]):
+        department = "약제관리실"
+    elif any(k in text for k in ["수가", "수가협상", "급여기획", "적정진료"]):
         department = "보험급여실 / 급여관리실"
-    elif any(k in text for k in ["장기요양", "요양원", "요양급여", "노인", "돌봄"]):
+    elif any(k in text for k in ["장기요양", "요양원", "요양급여"]):
         department = "요양기획실 / 요양급여실"
     elif any(k in text for k in ["복지용구", "요양기관", "요양평가"]):
         department = "요양자원실 / 요양심사실"
     elif any(k in text for k in ["건강검진", "검진", "만성질환"]):
         department = "건강검진실 / 건강지원사업실"
-    elif any(k in text for k in ["통합돌봄", "커뮤니티케어"]):
-        department = "통합돌봄실"
     elif any(k in text for k in ["빅데이터", "마이데이터", "인공지능", "AI"]):
         department = "빅데이터운영실 / NHIS인공지능실"
 
@@ -256,6 +263,18 @@ def analyze_article(title, summary_raw, link, press_list):
         summary_final = f"[{category} / {source_type}] {summary_body if summary_body else '주요 정책 동향 파악'}"
 
     return sentiment, article_type, category, summary_final, department, full_text, keywords_found
+
+def build_keyword_query(keywords_str):
+    """ 키워드 문자열 정제 """
+    if not keywords_str or keywords_str == 'nan':
+        return ""
+    tokens = [k.strip() for k in re.split(r'[,/|\s]+', keywords_str) if k.strip()]
+    if not tokens:
+        return ""
+    quoted_tokens = [f'"{t}"' for t in tokens if t.upper() != 'OR']
+    if len(quoted_tokens) == 1:
+        return quoted_tokens[0]
+    return f"({' OR '.join(quoted_tokens)})"
 
 def send_to_gas(url, data):
     if not url:
@@ -280,15 +299,24 @@ try:
     for _, row in reporters_df.iterrows():
         media = str(row.get('언론사', '')).strip()
         name = str(row.get('기자이름', '')).strip()
+        raw_keywords = str(row.get('키워드', '')).strip()
         
         if not name or name == 'nan':
             continue
             
-        # BBS 등 약칭 언론사 검색 누락 방지 처리
+        kw_query = build_keyword_query(raw_keywords)
+        
+        # 구글 뉴스 검색어 조합
         if media and media != 'nan':
-            raw_query = f'{media} "{name}" when:1y'
+            if kw_query:
+                raw_query = f'"{media}" "{name}" {kw_query} when:1y'
+            else:
+                raw_query = f'"{media}" "{name}" when:1y'
         else:
-            raw_query = f'"{name}" when:1y'
+            if kw_query:
+                raw_query = f'"{name}" {kw_query} when:1y'
+            else:
+                raw_query = f'"{name}" when:1y'
             
         print(f"\n[모니터링 대상] {media} {name} 기자")
         print(f" -> 검색 쿼리: {raw_query}")
@@ -303,12 +331,17 @@ try:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
             
+            # [필터 1] 제목에 기자 이름 포함 시 제외
+            if is_reporter_in_title(name, entry.title):
+                print(f"  └ [제외: 제목에 기자명 표기] {entry.title}")
+                continue
+            
             # 기사 분석 수행
             sentiment, article_type, category, summary, department, full_text, keywords_found = analyze_article(
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # 공단/건보 정책 연관성 검증
+            # [필터 2] 우리 회사(공단/건보) 연관성 검증 (없으면 제외)
             text_for_check = f"{entry.title} {summary_raw} {full_text if full_text else ''}"
             if not is_nhis_related(text_for_check):
                 print(f"  └ [제외: 공단/건보 무관 기사] {entry.title}")
@@ -324,7 +357,7 @@ try:
                 "sentiment": sentiment,           # 7. 기사 어조
                 "category": category,             # 8. 세부 카테고리
                 "summary": summary,               # 9. 요약
-                "department": department,         # 10. 공단 연관 부서/업무 (인력지원실 매핑)
+                "department": department,         # 10. 공단 연관 부서/업무
                 "link": entry.link                # 11. 원문링크
             }
             collected_articles.append(article_info)
@@ -339,9 +372,9 @@ try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 지정 기자 기사 발췌 리포트 ({len(collected_articles)}건)"
+        msg['Subject'] = f"[일일 모니터링] 정밀 검증 기사 발췌 리포트 ({len(collected_articles)}건)"
 
-        body = f"지정 기자별 공단 연관 기사 수집 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"제목 기자명 제외 & 공단 연관성 검증을 통과한 기사 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
             body += f"   - 기사제목: {item['title']}\n"
@@ -358,7 +391,7 @@ try:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
-        print(f"\n성공: 총 {len(collected_articles)}건 수집 및 전송 완료!")
+        print(f"\n성공: 총 {len(collected_articles)}건 정밀 필터링 및 전송 완료!")
     else:
         print("\n수집된 신규 기사가 없습니다.")
 
