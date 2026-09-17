@@ -31,10 +31,24 @@ def format_date(raw_date_str):
         return datetime.now().strftime("%Y-%m-%d")
 
 def analyze_article(title, summary_raw):
-    """ 기사 제목과 요약문 기반 기사 성격/카테고리/연관 부서 자동 분석 """
+    """ 기사 제목과 요약문 기반 어조(긍정/부정/중립), 성격, 카테고리, 연관부서 분석 """
     text = f"{title} {summary_raw}"
     
-    # 1. 기사 성격(분류) 판별
+    # 1. 기사 어조 (Sentiment) 감정 분석
+    neg_keywords = ["논란", "비판", "우려", "적발", "부정", "의혹", "부실", "반발", "충돌", "지적", "손실", "부담", "허점", "갈등", "한계"]
+    pos_keywords = ["성과", "개선", "확대", "지원", "호평", "우수", "달성", "협력", "도움", "인정", "신설", "완화", "혜택"]
+    
+    neg_score = sum(1 for k in neg_keywords if k in text)
+    pos_score = sum(1 for k in pos_keywords if k in text)
+    
+    if neg_score > pos_score and neg_score >= 1:
+        sentiment = "부정 (비판/리스크)"
+    elif pos_score > neg_score and pos_score >= 1:
+        sentiment = "긍정 (성과/진전)"
+    else:
+        sentiment = "중립 (단순 전달)"
+
+    # 2. 기사 성격(분류) 판별
     article_type = "사실기반 일반기사"
     if any(k in text for k in ["보도자료", "알림", "밝혔다", "배포"]):
         article_type = "보도자료 기반"
@@ -43,7 +57,7 @@ def analyze_article(title, summary_raw):
     elif any(k in text for k in ["사설", "기획", "추적", "심층"]):
         article_type = "기획/사설"
 
-    # 2. 세부 카테고리 판별
+    # 3. 세부 카테고리 판별
     category = "보건복지 일반"
     if "장기요양" in text or "요양" in text:
         category = "장기요양보험"
@@ -54,7 +68,7 @@ def analyze_article(title, summary_raw):
     elif "재정" in text or "부과" in text:
         category = "보험료/재정 관리"
 
-    # 3. 공단 연관 부서/업무 판별
+    # 4. 공단 연관 부서/업무 판별
     department = "기획조정실 / 홍보실"
     if "장기요양" in text:
         department = "요양가입부 / 요양급여실"
@@ -65,14 +79,17 @@ def analyze_article(title, summary_raw):
     elif "적발" in text or "사무장병원" in text:
         department = "의료기관지원실 (특사경)"
 
-    # 4. 주요 요약 및 시사점 정제
+    # 5. 주요 요약 및 시사점 정제
     clean_summary = summary_raw.replace("<b>", "").replace("</b>", "").strip()
     if len(clean_summary) > 150:
         clean_summary = clean_summary[:150] + "..."
-    if not clean_summary:
-        clean_summary = f"[{category}] 보건복지 현안 관련 동향 파악 필요"
+    
+    if sentiment == "부정 (비판/리스크)":
+        summary_final = f"[리스크 관리 필요] {clean_summary if clean_summary else '언론 비판 동향에 대한 공단 차원의 언론 대응 논리 및 사실관계 확인 필요'}"
+    else:
+        summary_final = clean_summary if clean_summary else f"[{category}] 관련 정책 동향 파악 필요"
 
-    return article_type, category, clean_summary, department
+    return sentiment, article_type, category, summary_final, department
 
 def send_to_gas(url, data):
     if not url:
@@ -107,8 +124,8 @@ try:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
             
-            # 기사 성격, 카테고리, 요약, 연관부서 분석
-            article_type, category, summary, department = analyze_article(entry.title, summary_raw)
+            # 어조, 성격, 카테고리, 요약, 연관부서 종합 분석
+            sentiment, article_type, category, summary, department = analyze_article(entry.title, summary_raw)
             
             article_info = {
                 "media": media,
@@ -116,6 +133,7 @@ try:
                 "title": entry.title,
                 "link": entry.link,
                 "published": published_date,
+                "sentiment": sentiment,
                 "article_type": article_type,
                 "category": category,
                 "summary": summary,
@@ -135,9 +153,9 @@ try:
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
             body += f"   - 제목: {item['title']}\n"
-            body += f"   - 성격/분류: [{item['article_type']}] | 카테고리: {item['category']}\n"
-            body += f"   - 연관부서: {item['department']}\n"
-            body += f"   - 요약: {item['summary']}\n"
+            body += f"   - 어조/성격: [{item['sentiment']}] | [{item['article_type']}]\n"
+            body += f"   - 카테고리/부서: {item['category']} | {item['department']}\n"
+            body += f"   - 요약/시사점: {item['summary']}\n"
             body += f"   - 링크: {item['link']}\n\n"
 
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
