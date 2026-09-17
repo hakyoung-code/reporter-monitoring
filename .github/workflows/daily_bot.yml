@@ -20,7 +20,7 @@ jobs:
       - name: 필수 라이브러리 설치
         run: |
           python -m pip install --upgrade pip
-          pip install pandas feedparser requests beautifulsoup4
+          pip install pandas feedparser requests beautifulsoup4 scikit-learn
 
       - name: main.py 실행
         env:
