@@ -2,29 +2,29 @@ name: Daily Reporter Monitoring
 
 on:
   schedule:
-    # 매일 한국시간 오전 8시(UTC 23시) 자동 실행
-    - cron: '0 23 * * *'
-  workflow_dispatch: # 수동 실행 버튼 생성
+    - cron: '0 0 * * *'  # 매일 한국시간 오전 9시 실행
+  workflow_dispatch:      # 수동 실행 버튼 활성화
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: 저장소 코드 불러오기
+        uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Python 환경 설정
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: 필수 라이브러리 설치
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install pandas feedparser requests beautifulsoup4
 
-      - name: Run Monitoring Script
+      - name: main.py 실행
         env:
           MY_EMAIL: ${{ secrets.MY_EMAIL }}
           MY_APP_PASSWORD: ${{ secrets.MY_APP_PASSWORD }}
-          GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }} # Apps Script URL 연결 추가
+          GAS_WEBAPP_URL: ${{ secrets.GAS_WEBAPP_URL }}
         run: python main.py
