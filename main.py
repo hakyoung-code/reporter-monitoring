@@ -28,14 +28,14 @@ SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
 
 # -------------------------------------------------------------
-# [설정] 보도자료 활용 판정 정밀 임계값 & 핵심 수집 키워드
+# [설정] 보도자료 활용 판정 임계값 & 공단 관련성 필수 키워드
 # -------------------------------------------------------------
 TFIDF_THRESHOLD = 0.72       # 코사인 유사도 기준 (72% 이상)
 SENTENCE_HIT_MIN = 2         # 보도자료 고유 문장 일치 개수 (최소 2개)
 MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 
-# 매칭 키워드 리스트 (감지 및 기록용)
-TARGET_KEYWORDS = ["건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료"]
+# 공단/건보 연관성 판별 필수 키워드 (우리 회사 관련성 검증용)
+NHIS_CORE_KEYWORDS = ["건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료", "장기요양", "공단", "수가", "약가", "급여"]
 
 collected_articles = []
 nhis_press_releases = []
@@ -99,12 +99,21 @@ def fetch_full_text(url):
         pass
     return None
 
-def verify_reporter_flexible(target_reporter, title, summary_raw, full_text):
-    """ 
-    [유연한 기자 검증] 구글 뉴스에서 필터링되어 온 결과 중 기자명이 어디든 포함되어 있으면 인정
-    """
-    text_to_check = f"{title} {summary_raw} {full_text if full_text else ''}"
-    return target_reporter in text_to_check
+def is_reporter_in_title(reporter_name, title):
+    """ 제목에 기자 이름이 직접 포함된 경우 필터링 (예: '[이혜인 기자]', '이혜인 기자 =') """
+    if not reporter_name:
+        return False
+    patterns = [
+        f"{reporter_name} 기자",
+        f"{reporter_name}기자",
+        f"[{reporter_name}]",
+        f"({reporter_name})"
+    ]
+    return any(p in title for p in patterns)
+
+def is_nhis_related(text):
+    """ 우리 회사(공단/건보) 관련 핵심 키워드가 1개 이상 들어있는지 확인 """
+    return any(kw in text for kw in NHIS_CORE_KEYWORDS)
 
 def check_press_release_usage(article_text, press_list):
     """ TF-IDF 코사인 유사도 + 고유 문장 매칭 분석 """
@@ -137,8 +146,8 @@ def check_press_release_usage(article_text, press_list):
     return is_press_used, max_sim, max_hit_count
 
 def extract_matched_keywords(text):
-    """ 지정된 키워드 감지 후 문자열 반환 """
-    found = [kw for kw in TARGET_KEYWORDS if kw in text]
+    """ 감지된 주요 키워드 추출 """
+    found = [kw for kw in NHIS_CORE_KEYWORDS if kw in text]
     return ", ".join(found) if found else "일반"
 
 def analyze_article(title, summary_raw, link, press_list):
@@ -248,6 +257,18 @@ def analyze_article(title, summary_raw, link, press_list):
 
     return sentiment, article_type, category, summary_final, department, full_text, keywords_found
 
+def build_keyword_query(keywords_str):
+    """ 키워드 문자열 정제 """
+    if not keywords_str or keywords_str == 'nan':
+        return ""
+    tokens = [k.strip() for k in re.split(r'[,/|\s]+', keywords_str) if k.strip()]
+    if not tokens:
+        return ""
+    quoted_tokens = [f'"{t}"' for t in tokens if t.upper() != 'OR']
+    if len(quoted_tokens) == 1:
+        return quoted_tokens[0]
+    return f"({' OR '.join(quoted_tokens)})"
+
 def send_to_gas(url, data):
     if not url:
         return False
@@ -271,38 +292,52 @@ try:
     for _, row in reporters_df.iterrows():
         media = str(row.get('언론사', '')).strip()
         name = str(row.get('기자이름', '')).strip()
-        keywords = str(row.get('키워드', '')).strip()
+        raw_keywords = str(row.get('키워드', '')).strip()
         
         if not name or name == 'nan':
             continue
             
-        # 정밀 검색어 구성
-        if keywords and keywords != 'nan':
-            raw_query = f'"{name}" ({keywords}) after:2026-09-01'
-        elif media and media != 'nan':
-            raw_query = f'"{media}" "{name}" after:2026-09-01'
+        kw_query = build_keyword_query(raw_keywords)
+        
+        # 구글 뉴스 검색어 조합
+        if media and media != 'nan':
+            if kw_query:
+                raw_query = f'"{media}" "{name}" {kw_query} when:1y'
+            else:
+                raw_query = f'"{media}" "{name}" when:1y'
         else:
-            raw_query = f'"{name}" after:2026-09-01'
+            if kw_query:
+                raw_query = f'"{name}" {kw_query} when:1y'
+            else:
+                raw_query = f'"{name}" when:1y'
             
-        print(f"\n[모니터링 대상] {media} {name} 기자 (쿼리: {raw_query})")
+        print(f"\n[모니터링 대상] {media} {name} 기자")
+        print(f" -> 검색 쿼리: {raw_query}")
+        
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
         feed = feedparser.parse(rss_url)
-        print(f" -> 구글 뉴스 RSS 수집 건수: {len(feed.entries)}건")
+        print(f" -> 구글 뉴스 RSS 발견 기사: {len(feed.entries)}건")
         
         for entry in feed.entries:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
+            
+            # [필터 1] 제목에 기자 이름 포함 시 제외
+            if is_reporter_in_title(name, entry.title):
+                print(f"  └ [제외: 제목에 기자명 표기] {entry.title}")
+                continue
             
             # 기사 분석 수행
             sentiment, article_type, category, summary, department, full_text, keywords_found = analyze_article(
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # 기자 이름 매칭 유연 검증
-            if not verify_reporter_flexible(name, entry.title, summary_raw, full_text):
-                print(f"  └ [제외: 본문/제목 내 기자명 미포함] {entry.title}")
+            # [필터 2] 우리 회사(공단/건보) 연관성 검증 (없으면 제외)
+            text_for_check = f"{entry.title} {summary_raw} {full_text if full_text else ''}"
+            if not is_nhis_related(text_for_check):
+                print(f"  └ [제외: 공단/건보 무관 기사] {entry.title}")
                 continue
             
             article_info = {
@@ -321,7 +356,7 @@ try:
             collected_articles.append(article_info)
             success = send_to_gas(GAS_WEBAPP_URL, article_info)
             if success:
-                print(f"  └ [시트 전송 성공] {entry.title}")
+                print(f"  └ [시트 발췌 성공] {entry.title}")
             else:
                 print(f"  └ [시트 전송 실패] {entry.title}")
 
@@ -330,9 +365,9 @@ try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 기자별 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
+        msg['Subject'] = f"[일일 모니터링] 정밀 검증 기사 발췌 리포트 ({len(collected_articles)}건)"
 
-        body = f"2026년 9월 1일 이후 지정 기자의 신규 기사 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"제목 기자명 제외 & 공단 연관성 검증을 통과한 기사 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
             body += f"   - 기사제목: {item['title']}\n"
@@ -349,7 +384,7 @@ try:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
-        print(f"\n성공: 총 {len(collected_articles)}건 기사 수집 및 전송 완료!")
+        print(f"\n성공: 총 {len(collected_articles)}건 정밀 필터링 및 전송 완료!")
     else:
         print("\n수집된 신규 기사가 없습니다.")
 
