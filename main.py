@@ -10,11 +10,13 @@ from email.utils import parsedate_to_datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# 1. 환경 변수 로드
 SENDER_EMAIL = os.environ.get("MY_EMAIL")
 SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"
 GAS_WEBAPP_URL = os.environ.get("GAS_WEBAPP_URL")
 
+# 기자명단 구글 시트 CSV 내보내기 URL
 SPREADSHEET_ID = "1WBUcXZ0Sj9UJMo_vzlkNhFdbsNLDroaK81f0OiKnyX0"
 SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
@@ -22,6 +24,7 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tq
 collected_articles = []
 
 def format_date(raw_date_str):
+    """ RSS 영문 날짜를 YYYY-MM-DD 형식으로 안전 변환 """
     if not raw_date_str:
         return datetime.now().strftime("%Y-%m-%d")
     try:
@@ -31,7 +34,7 @@ def format_date(raw_date_str):
         return datetime.now().strftime("%Y-%m-%d")
 
 def analyze_article(title, summary_raw):
-    """ 기사 제목과 요약문 기반 어조(긍정/부정/중립), 성격, 카테고리, 연관부서 분석 """
+    """ 기사 제목 및 요약문 기반 어조/성격/카테고리/요약/연관부서 자동 분석 """
     text = f"{title} {summary_raw}"
     
     # 1. 기사 어조 (Sentiment) 감정 분석
@@ -85,13 +88,14 @@ def analyze_article(title, summary_raw):
         clean_summary = clean_summary[:150] + "..."
     
     if sentiment == "부정 (비판/리스크)":
-        summary_final = f"[리스크 관리 필요] {clean_summary if clean_summary else '언론 비판 동향에 대한 공단 차원의 언론 대응 논리 및 사실관계 확인 필요'}"
+        summary_final = f"[리스크 관리 필요] {clean_summary if clean_summary else '언론 비판 동향 대응 및 공단 차원의 사실관계 확인 필요'}"
     else:
-        summary_final = clean_summary if clean_summary else f"[{category}] 관련 정책 동향 파악 필요"
+        summary_final = clean_summary if clean_summary else f"[{category}] 관련 주요 정책 동향 파악"
 
     return sentiment, article_type, category, summary_final, department
 
 def send_to_gas(url, data):
+    """ 구글 Apps Script 전송 (타임아웃 30초 설정 및 재시도) """
     if not url:
         return False
     for attempt in range(3):
@@ -104,6 +108,7 @@ def send_to_gas(url, data):
     return False
 
 try:
+    # 기자 명단 CSV 읽기
     reporters_df = pd.read_csv(SHEET_URL, encoding='utf-8')
     
     for _, row in reporters_df.iterrows():
@@ -114,6 +119,7 @@ try:
         if not name or name == 'nan':
             continue
             
+        # 2026년 9월 1일 이후 기사 수집 쿼리
         raw_query = f'"{name}" ({keywords}) after:2026-09-01'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
@@ -124,9 +130,10 @@ try:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
             
-            # 어조, 성격, 카테고리, 요약, 연관부서 종합 분석
+            # 분석 실행
             sentiment, article_type, category, summary, department = analyze_article(entry.title, summary_raw)
             
+            # 10개 전송 데이터 개체 구성
             article_info = {
                 "media": media,
                 "reporter": name,
@@ -142,7 +149,7 @@ try:
             collected_articles.append(article_info)
             send_to_gas(GAS_WEBAPP_URL, article_info)
 
-    # 이메일 종합 브리핑 발송
+    # 이메일 종합 브리핑 전송
     if collected_articles and SENDER_EMAIL and SENDER_PASSWORD:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
@@ -165,6 +172,9 @@ try:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
+        print(f"성공: 총 {len(collected_articles)}건 기사 수집 및 처리 완료!")
+    else:
+        print("수집된 신규 기사가 없습니다.")
 
 except Exception as e:
     print(f"오류 발생: {e}")
