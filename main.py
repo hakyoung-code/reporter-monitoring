@@ -5,6 +5,8 @@ import feedparser
 import smtplib
 import requests
 import time
+import re
+from bs4 import BeautifulSoup
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from email.mime.text import MIMEText
@@ -33,11 +35,59 @@ def format_date(raw_date_str):
     except Exception:
         return datetime.now().strftime("%Y-%m-%d")
 
-def analyze_article(title, summary_raw):
-    """ 기사 제목 및 요약문 기반 어조/성격/카테고리/요약/연관부서 자동 분석 """
-    text = f"{title} {summary_raw}"
+def fetch_full_text(url):
+    """ 
+    [1차] 기사 원문 페이지에서 본문 전문 크롤링 시도 
+    [2차] 언론사 차단/오류 발생 시 None 반환 (RSS 요약문으로 자동 예외 처리)
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # 노이즈 태그 제거 (스크립트, 스타일, 헤더, 푸터 등)
+            for tag in soup(['script', 'style', 'header', 'footer', 'nav', 'aside', 'iframe']):
+                tag.decompose()
+            
+            # 본문 기사 텍스트 추출
+            paragraphs = soup.find_all('p')
+            if paragraphs:
+                text = ' '.join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 20])
+            else:
+                text = soup.get_text()
+            
+            # 공백 정제
+            clean_text = re.sub(r'\s+', ' ', text).strip()
+            
+            # 본문이 100자 이상 추출되었을 경우만 전문으로 인정
+            if len(clean_text) >= 100:
+                return clean_text
+    except Exception:
+        pass
     
-    # 1. 기사 어조 (Sentiment) 감정 분석
+    return None  # 실패 시 None 반환하여 RSS 요약문 사용
+
+def analyze_article(title, summary_raw, link):
+    """ 
+    전문 우선 기사 분석 함수 (실패 시 RSS 요약문 활용)
+    """
+    # 1. 전문 크롤링 시도 및 분석 대상 텍스트 선정
+    full_text = fetch_full_text(link)
+    
+    if full_text:
+        source_type = "전문 분석"
+        analysis_base_text = f"{title} {full_text}"
+    else:
+        source_type = "RSS 요약문 분석"
+        clean_rss_summary = summary_raw.replace("<b>", "").replace("</b>", "").strip()
+        analysis_base_text = f"{title} {clean_rss_summary}"
+
+    text = analysis_base_text
+    
+    # 2. 기사 어조 (Sentiment) 감정 분석
     neg_keywords = ["논란", "비판", "우려", "적발", "부정", "의혹", "부실", "반발", "충돌", "지적", "손실", "부담", "허점", "갈등", "한계"]
     pos_keywords = ["성과", "개선", "확대", "지원", "호평", "우수", "달성", "협력", "도움", "인정", "신설", "완화", "혜택"]
     
@@ -51,16 +101,19 @@ def analyze_article(title, summary_raw):
     else:
         sentiment = "중립 (단순 전달)"
 
-    # 2. 기사 성격(분류) 판별
+    # 3. 기사 성격(분류) 판별 (확장 키워드 적용)
     article_type = "사실기반 일반기사"
-    if any(k in text for k in ["보도자료", "알림", "밝혔다", "배포"]):
-        article_type = "보도자료 기반"
-    elif any(k in text for k in ["기고", "칼럼", "시론", "포럼", "특별기획", "오피니언", "시각", "데스크"]):
+    if any(k in text for k in ["기고", "칼럼", "시론", "포럼", "특별기획", "오피니언", "시각", "데스크"]):
         article_type = "기고/오피니언"
     elif any(k in text for k in ["사설", "기획", "추적", "심층"]):
         article_type = "기획/사설"
+    elif any(k in text for k in [
+        "보도자료", "알림", "밝혔다", "배포", "자료", "설명했다", 
+        "따르면", "발표했다", "전했다", "안내", "안내했다", "덧붙였다", "제공"
+    ]):
+        article_type = "보도자료 기반"
 
-    # 3. 세부 카테고리 판별
+    # 4. 세부 카테고리 판별
     category = "보건복지 일반"
     if "장기요양" in text or "요양" in text:
         category = "장기요양보험"
@@ -71,7 +124,7 @@ def analyze_article(title, summary_raw):
     elif "재정" in text or "부과" in text:
         category = "보험료/재정 관리"
 
-    # 4. 공단 연관 부서/업무 판별
+    # 5. 공단 연관 부서/업무 판별
     department = "기획조정실 / 홍보실"
     if "장기요양" in text:
         department = "요양가입부 / 요양급여실"
@@ -82,15 +135,17 @@ def analyze_article(title, summary_raw):
     elif "적발" in text or "사무장병원" in text:
         department = "의료기관지원실 (특사경)"
 
-    # 5. 주요 요약 및 시사점 정제
-    clean_summary = summary_raw.replace("<b>", "").replace("</b>", "").strip()
-    if len(clean_summary) > 150:
-        clean_summary = clean_summary[:150] + "..."
-    
-    if sentiment == "부정 (비판/리스크)":
-        summary_final = f"[리스크 관리 필요] {clean_summary if clean_summary else '언론 비판 동향 대응 및 공단 차원의 사실관계 확인 필요'}"
+    # 6. 주요 요약 및 시사점 정제
+    if full_text:
+        summary_body = full_text[:200] + "..."
     else:
-        summary_final = clean_summary if clean_summary else f"[{category}] 관련 주요 정책 동향 파악"
+        clean_summary = summary_raw.replace("<b>", "").replace("</b>", "").strip()
+        summary_body = clean_summary[:150] + "..." if len(clean_summary) > 150 else clean_summary
+
+    if sentiment == "부정 (비판/리스크)":
+        summary_final = f"[리스크 관리 필요 / {source_type}] {summary_body if summary_body else '언론 비판 동향 대응 필요'}"
+    else:
+        summary_final = f"[{category} / {source_type}] {summary_body if summary_body else '주요 정책 동향 파악'}"
 
     return sentiment, article_type, category, summary_final, department
 
@@ -108,7 +163,6 @@ def send_to_gas(url, data):
     return False
 
 try:
-    # 기자 명단 CSV 읽기
     reporters_df = pd.read_csv(SHEET_URL, encoding='utf-8')
     
     for _, row in reporters_df.iterrows():
@@ -130,10 +184,10 @@ try:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
             
-            # 분석 실행
-            sentiment, article_type, category, summary, department = analyze_article(entry.title, summary_raw)
+            # 전문 우선 기사 분석 실행 (원문 링크 포함 전달)
+            sentiment, article_type, category, summary, department = analyze_article(entry.title, summary_raw, entry.link)
             
-            # 10개 전송 데이터 개체 구성
+            # 10개 항목 데이터 구성
             article_info = {
                 "media": media,
                 "reporter": name,
