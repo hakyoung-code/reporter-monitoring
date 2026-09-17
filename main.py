@@ -37,6 +37,16 @@ MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 # 매칭 키워드 리스트 (감지 및 기록용)
 TARGET_KEYWORDS = ["건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료"]
 
+# 바이라인 정규식 패턴 (기자 본인 작성 검증용)
+BYLINE_PATTERNS = [
+    r"([가-힣]{2,4})\s*기자",
+    r"([가-힣]{2,4})\s*기자\s*[\w.]+@",
+    r"/\s*([가-힣]{2,4})\s*기자",
+    r"\[([가-힣]{2,4})\s*기자\]",
+    r"\(([가-힣]{2,4})\s*기자\)",
+    r"글\s*=\s*([가-힣]{2,4})\s*기자"
+]
+
 collected_articles = []
 nhis_press_releases = []
 
@@ -98,6 +108,28 @@ def fetch_full_text(url):
     except Exception:
         pass
     return None
+
+def verify_reporter_strict(target_reporter, title, full_text):
+    """ 
+    [엄격한 바이라인 검증] 기자명이 '홍길동 기자' 형태로 기사 원문에 실제 존재하는지 확인
+    """
+    text_to_check = f"{title} {full_text if full_text else ''}"
+    
+    # 1. 기자 이름이 텍스트 내에 전혀 없으면 탈락
+    if target_reporter not in text_to_check:
+        return False
+        
+    # 2. 정규식 바이라인 패턴 확인 (예: '이혜인 기자')
+    for pattern in BYLINE_PATTERNS:
+        matches = re.findall(pattern, text_to_check)
+        if target_reporter in matches:
+            return True
+            
+    # 3. 바이라인 정규식 외 단순 '기자이름 기자' 문자열 매칭 보완
+    if f"{target_reporter} 기자" in text_to_check or f"{target_reporter}기자" in text_to_check:
+        return True
+        
+    return False
 
 def check_press_release_usage(article_text, press_list):
     """ TF-IDF 코사인 유사도 + 고유 문장 매칭 분석 """
@@ -266,25 +298,20 @@ try:
         name = str(row.get('기자이름', '')).strip()
         keywords = str(row.get('키워드', '')).strip()
         
-        # 검색어 자동 조합 안전장치 (키워드 우선 ➔ 기자명/언론사 차선)
-        search_term = ""
-        if keywords and keywords != 'nan':
-            search_term = keywords
-        elif name and name != 'nan':
-            search_term = f'"{name}"'
-        elif media and media != 'nan':
-            search_term = f'"{media}"'
-            
-        if not search_term:
+        if not name or name == 'nan':
             continue
             
-        print(f"검색 진행 중: [{search_term}]")
-        raw_query = f'{search_term} after:2026-09-01'
+        # [수정] 언론사 + 기자명 필수 포함 검색어 구성
+        if media and media != 'nan':
+            raw_query = f'"{media}" "{name}" ({keywords}) after:2026-09-01'
+        else:
+            raw_query = f'"{name}" ({keywords}) after:2026-09-01'
+            
+        print(f"기자별 검증 수집 진행: [{media} {name} 기자]")
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
         feed = feedparser.parse(rss_url)
-        print(f"-> 수집된 뉴스 entry 개수: {len(feed.entries)}건")
         
         for entry in feed.entries:
             published_date = format_date(entry.get('published', ''))
@@ -295,10 +322,15 @@ try:
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
+            # [핵심] 기자 본인 작성 기사 여부 엄격 검증
+            if not verify_reporter_strict(name, entry.title, full_text):
+                print(f"-> 타인 기사 또는 단순 언급 제외: [{name} 미일치] {entry.title}")
+                continue
+            
             article_info = {
                 "published": published_date,       # 1. 게재일
-                "media": media if media != 'nan' else "일반매체", # 2. 언론사
-                "reporter": name if name != 'nan' else "미지정",  # 3. 기자명
+                "media": media,                   # 2. 언론사
+                "reporter": name,                 # 3. 기자명
                 "title": entry.title,             # 4. 기사제목
                 "keywords_found": keywords_found, # 5. 키워드
                 "article_type": article_type,     # 6. 기사 성격
@@ -316,11 +348,12 @@ try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 키워드 기반 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
+        msg['Subject'] = f"[일일 모니터링] 기자 작성 기사 검증 브리핑 ({len(collected_articles)}건)"
 
-        body = f"2026년 9월 1일 이후 수집된 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"2026년 9월 1일 이후 지정 기자가 직접 작성한 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
-            body += f"{idx}. [{item['published']}] [{item['title']}]\n"
+            body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
+            body += f"   - 기사제목: {item['title']}\n"
             body += f"   - 감지 키워드: {item['keywords_found']}\n"
             body += f"   - 성격/어조: [{item['article_type']}] | [{item['sentiment']}]\n"
             body += f"   - 카테고리/부서: {item['category']} | {item['department']}\n"
@@ -338,7 +371,5 @@ try:
     else:
         print("수집된 신규 기사가 없습니다.")
 
-except Exception as e:
-    print(f"오류 발생: {e}")
 except Exception as e:
     print(f"오류 발생: {e}")
