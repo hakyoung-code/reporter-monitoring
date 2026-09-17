@@ -53,7 +53,7 @@ def fetch_nhis_press_releases():
     """ 국민건강보험공단 홈페이지 보도자료 게시판 자동 크롤링 """
     press_list = []
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     }
     board_url = "https://www.nhis.or.kr/nhis/together/wbhaea01600m01.do"
     
@@ -61,12 +61,13 @@ def fetch_nhis_press_releases():
         res = requests.get(board_url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            items = soup.select('.board-list tbody tr')
-            for item in items[:10]:
-                title_elem = item.select_one('.subject a, td.title a')
+            items = soup.select('.board-list tbody tr, table tr')
+            for item in items[:15]:
+                title_elem = item.select_one('.subject a, td.title a, a')
                 if title_elem:
                     title = title_elem.get_text().strip()
-                    press_list.append({"title": title, "content": title})
+                    if len(title) > 5 and title not in [p['title'] for p in press_list]:
+                        press_list.append({"title": title, "content": title})
         print(f"공단 보도자료 {len(press_list)}건 자동 수집 완료")
     except Exception as e:
         print(f"공단 보도자료 크롤링 예외 발생: {e}")
@@ -76,7 +77,7 @@ def fetch_nhis_press_releases():
 def fetch_full_text(url):
     """ 기사 원문 전문 크롤링 (실패 시 None) """
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     }
     try:
         res = requests.get(url, headers=headers, timeout=5)
@@ -256,24 +257,34 @@ try:
     # 1. 공단 보도자료 사전 크롤링
     nhis_press_releases = fetch_nhis_press_releases()
     
-    # 2. 명단 읽기
+    # 2. 명단 구글 시트 읽기
     reporters_df = pd.read_csv(SHEET_URL, encoding='utf-8')
+    print(f"구글 시트 읽기 성공 (총 {len(reporters_df)}행)")
     
     for _, row in reporters_df.iterrows():
         media = str(row.get('언론사', '')).strip()
         name = str(row.get('기자이름', '')).strip()
         keywords = str(row.get('키워드', '')).strip()
         
-        # 키워드가 비어있으면 건너뜀
-        if not keywords or keywords == 'nan':
+        # 검색어 자동 조합 안전장치 (키워드 우선 ➔ 기자명/언론사 차선)
+        search_term = ""
+        if keywords and keywords != 'nan':
+            search_term = keywords
+        elif name and name != 'nan':
+            search_term = f'"{name}"'
+        elif media and media != 'nan':
+            search_term = f'"{media}"'
+            
+        if not search_term:
             continue
             
-        # [수정] 기자 이름 조건 제거 ➔ 키워드 중심으로만 검색 수행
-        raw_query = f'{keywords} after:2026-09-01'
+        print(f"검색 진행 중: [{search_term}]")
+        raw_query = f'{search_term} after:2026-09-01'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
         feed = feedparser.parse(rss_url)
+        print(f"-> 수집된 뉴스 entry 개수: {len(feed.entries)}건")
         
         for entry in feed.entries:
             published_date = format_date(entry.get('published', ''))
@@ -284,7 +295,6 @@ try:
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # 요청된 11개 컬럼 규격 개체 구성
             article_info = {
                 "published": published_date,       # 1. 게재일
                 "media": media if media != 'nan' else "일반매체", # 2. 언론사
@@ -308,7 +318,7 @@ try:
         msg['To'] = RECEIVER_EMAIL
         msg['Subject'] = f"[일일 모니터링] 키워드 기반 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
 
-        body = f"2026년 9월 1일 이후 수집된 주제 키워드별 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"2026년 9월 1일 이후 수집된 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['published']}] [{item['title']}]\n"
             body += f"   - 감지 키워드: {item['keywords_found']}\n"
@@ -328,5 +338,7 @@ try:
     else:
         print("수집된 신규 기사가 없습니다.")
 
+except Exception as e:
+    print(f"오류 발생: {e}")
 except Exception as e:
     print(f"오류 발생: {e}")
