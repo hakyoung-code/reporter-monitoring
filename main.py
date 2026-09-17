@@ -28,23 +28,14 @@ SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
 
 # -------------------------------------------------------------
-# [설정] 보도자료 활용 판정 임계값 & 핵심 수집 키워드
+# [설정] 보도자료 활용 판정 정밀 임계값 & 핵심 수집 키워드
 # -------------------------------------------------------------
 TFIDF_THRESHOLD = 0.72       # 코사인 유사도 기준 (72% 이상)
 SENTENCE_HIT_MIN = 2         # 보도자료 고유 문장 일치 개수 (최소 2개)
 MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 
-# 매칭 키워드 리스트
+# 매칭 키워드 리스트 (감지 및 기록용)
 TARGET_KEYWORDS = ["건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료"]
-
-# 바이라인 정규식 패턴 (동명이인 판별용)
-BYLINE_PATTERNS = [
-    r"([가-힣]{2,4})\s*기자",
-    r"([가-힣]{2,4})\s*기자\s*[\w.]+@",
-    r"/\s*([가-힣]{2,4})\s*기자",
-    r"\[([가-힣]{2,4})\s*기자\]",
-    r"\(([가-힣]{2,4})\s*기자\)"
-]
 
 collected_articles = []
 nhis_press_releases = []
@@ -106,21 +97,6 @@ def fetch_full_text(url):
     except Exception:
         pass
     return None
-
-def verify_reporter(target_media, target_reporter, title, full_text):
-    """ 복합키 및 바이라인 검증으로 동명이인 필터링 """
-    text_to_check = f"{title} {full_text if full_text else ''}"
-    if target_reporter not in text_to_check:
-        return False
-        
-    byline_found = False
-    for pattern in BYLINE_PATTERNS:
-        matches = re.findall(pattern, text_to_check)
-        if target_reporter in matches:
-            byline_found = True
-            break
-            
-    return byline_found or (target_reporter in text_to_check)
 
 def check_press_release_usage(article_text, press_list):
     """ TF-IDF 코사인 유사도 + 고유 문장 매칭 분석 """
@@ -280,7 +256,7 @@ try:
     # 1. 공단 보도자료 사전 크롤링
     nhis_press_releases = fetch_nhis_press_releases()
     
-    # 2. 기자 명단 읽기
+    # 2. 명단 읽기
     reporters_df = pd.read_csv(SHEET_URL, encoding='utf-8')
     
     for _, row in reporters_df.iterrows():
@@ -288,11 +264,12 @@ try:
         name = str(row.get('기자이름', '')).strip()
         keywords = str(row.get('키워드', '')).strip()
         
-        if not name or name == 'nan':
+        # 키워드가 비어있으면 건너뜀
+        if not keywords or keywords == 'nan':
             continue
             
-        reporter_key = f"{media}_{name}"
-        raw_query = f'"{name}" ({keywords}) after:2026-09-01'
+        # [수정] 기자 이름 조건 제거 ➔ 키워드 중심으로만 검색 수행
+        raw_query = f'{keywords} after:2026-09-01'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
         
@@ -307,16 +284,11 @@ try:
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # 동명이인 바이라인 검증
-            if not verify_reporter(media, name, entry.title, full_text):
-                print(f"동명이인 또는 타겟 기자 미일치로 제외: [{reporter_key}] - {entry.title}")
-                continue
-            
             # 요청된 11개 컬럼 규격 개체 구성
             article_info = {
                 "published": published_date,       # 1. 게재일
-                "media": media,                   # 2. 언론사
-                "reporter": name,                 # 3. 기자명
+                "media": media if media != 'nan' else "일반매체", # 2. 언론사
+                "reporter": name if name != 'nan' else "미지정",  # 3. 기자명
                 "title": entry.title,             # 4. 기사제목
                 "keywords_found": keywords_found, # 5. 키워드
                 "article_type": article_type,     # 6. 기사 성격
@@ -334,12 +306,11 @@ try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 기자 명단 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
+        msg['Subject'] = f"[일일 모니터링] 키워드 기반 신규 기사 종합 브리핑 ({len(collected_articles)}건)"
 
-        body = f"2026년 9월 1일 이후 수집된 기자별 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"2026년 9월 1일 이후 수집된 주제 키워드별 기사 분석 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
-            body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
-            body += f"   - 기사제목: {item['title']}\n"
+            body += f"{idx}. [{item['published']}] [{item['title']}]\n"
             body += f"   - 감지 키워드: {item['keywords_found']}\n"
             body += f"   - 성격/어조: [{item['article_type']}] | [{item['sentiment']}]\n"
             body += f"   - 카테고리/부서: {item['category']} | {item['department']}\n"
