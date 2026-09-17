@@ -10,7 +10,6 @@ from email.utils import parsedate_to_datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# 1. 환경 변수
 SENDER_EMAIL = os.environ.get("MY_EMAIL")
 SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"
@@ -23,29 +22,30 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tq
 collected_articles = []
 
 def format_date(raw_date_str):
-    """ 영문 날짜 형식을 YYYY-MM-DD 형식으로 변환 """
+    """ RSS 영문 날짜를 YYYY-MM-DD 형식으로 확실하게 변환 """
     if not raw_date_str:
         return datetime.now().strftime("%Y-%m-%d")
     try:
         dt = parsedate_to_datetime(raw_date_str)
         return dt.strftime("%Y-%m-%d")
     except Exception:
-        return datetime.now().strftime("%Y-%m-%d")
+        try:
+            return datetime.strptime(raw_date_str[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+        except Exception:
+            return datetime.now().strftime("%Y-%m-%d")
 
 def send_to_gas(url, data):
-    """ 구글 Apps Script 전송 (타임아웃 30초 확장 및 리다이렉트 추적) """
     if not url:
         return False
         
     for attempt in range(3):
         try:
-            # timeout을 30초로 대폭 늘려 구글의 첫 파일 생성 시간(Lock 대기 시간) 확보
             res = requests.post(url, json=data, timeout=30, allow_redirects=True)
             if "Error" in res.text:
                 print(f"⚠️ GAS 응답 오류 ({data['reporter']}): {res.text}")
             else:
                 return True
-        except Exception as e:
+        except Exception:
             time.sleep(2)
     print(f"❌ 최종 시트 전송 실패 ({data['reporter']})")
     return False
@@ -61,7 +61,6 @@ try:
         if not name or name == 'nan':
             continue
             
-        # 2026년 9월 1일 이후 기사 수집
         raw_query = f'"{name}" ({keywords}) after:2026-09-01'
         encoded_query = urllib.parse.quote(raw_query)
         rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
@@ -79,11 +78,8 @@ try:
                 "published": published_date
             }
             collected_articles.append(article_info)
-            
-            # 구글 시트 웹앱 전송
             send_to_gas(GAS_WEBAPP_URL, article_info)
 
-    # 이메일 전송 처리
     if collected_articles and SENDER_EMAIL and SENDER_PASSWORD:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
@@ -101,9 +97,6 @@ try:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_bytes())
         server.quit()
-        print(f"성공: 총 {len(collected_articles)}건의 기사 수집 및 처리 완료!")
-    else:
-        print("수집된 신규 기사가 없습니다.")
 
 except Exception as e:
     print(f"오류 발생: {e}")
