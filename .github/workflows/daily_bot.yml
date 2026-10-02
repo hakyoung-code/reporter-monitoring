@@ -2,7 +2,8 @@ name: Daily Reporter Monitoring
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 매일 한국시간 오전 9시 자동 실행
+    # UTC 22:00 = 한국 시간(KST) 매일 아침 07:00
+    - cron: '0 22 * * *'
   workflow_dispatch:      # 수동 실행 버튼 활성화
 
 jobs:
@@ -22,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas feedparser requests beautifulsoup4 scikit-learn
 
-      - name: 4. 기자 모니터링 및 원인 분석 스크립트 실행
+      - name: 4. 기자 모니터링 및 분석 스크립트 실행
         env:
           MY_EMAIL: ${{ secrets.MY_EMAIL }}
           MY_APP_PASSWORD: ${{ secrets.MY_APP_PASSWORD }}
