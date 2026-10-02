@@ -22,7 +22,7 @@ SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"
 GAS_WEBAPP_URL = os.environ.get("GAS_WEBAPP_URL")
 
-# 기자명단 구글 시트 CSV URL ('모니터링 기자 명단' 시트 참조)
+# 기자명단 구글 시트 CSV URL ('기자명단' 시트 참조)
 SPREADSHEET_ID = "1WBUcXZ0Sj9UJMo_vzlkNhFdbsNLDroaK81f0OiKnyX0"
 SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
@@ -296,7 +296,7 @@ try:
             
         kw_query = build_keyword_query(raw_keywords)
         
-        # [핵심] 언론사명 큰따옴표 제거 -> 비바100 등 계열 서브 사이트 기사 누락 방지
+        # 2026년 1월 1일 이후 기사 수집 범위 지정 (after:2026-01-01)
         if media and media != 'nan':
             if kw_query:
                 raw_query = f'{media} "{name}" {kw_query} after:2026-01-01'
