@@ -12,7 +12,7 @@ from email.utils import parsedate_to_datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# TF-IDF 및 코사인 유사도 알고리즘 (무료 패키지)
+# TF-IDF 및 코사인 유사도 알고리즘
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -22,7 +22,7 @@ SENDER_PASSWORD = os.environ.get("MY_APP_PASSWORD")
 RECEIVER_EMAIL = "poii77725@gmail.com"
 GAS_WEBAPP_URL = os.environ.get("GAS_WEBAPP_URL")
 
-# 기자명단 구글 시트 CSV URL
+# 기자명단 구글 시트 CSV URL ('모니터링 기자 명단' 시트 참조)
 SPREADSHEET_ID = "1WBUcXZ0Sj9UJMo_vzlkNhFdbsNLDroaK81f0OiKnyX0"
 SHEET_NAME_ENCODED = urllib.parse.quote("기자명단")
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME_ENCODED}"
@@ -34,7 +34,7 @@ TFIDF_THRESHOLD = 0.72       # 코사인 유사도 기준 (72% 이상)
 SENTENCE_HIT_MIN = 2         # 보도자료 고유 문장 일치 개수 (최소 2개)
 MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 
-# 공단/건보 연관성 판별 필수 키워드 (요청 키워드 5종 추가 완료)
+# 공단/건보 연관성 판별 필수 키워드
 NHIS_CORE_KEYWORDS = [
     "건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료", "장기요양", "공단", "수가", "약가", "급여",
     "통합돌봄", "부과체계", "완납증명서", "의료비", "보건의료"
@@ -103,7 +103,7 @@ def fetch_full_text(url):
     return None
 
 def is_reporter_in_title(reporter_name, title):
-    """ 제목에 기자 이름이 직접 포함된 경우 필터링 (예: '[이혜인 기자]', '이혜인 기자 =') """
+    """ 제목에 기자 이름이 직접 포함된 경우 필터링 """
     if not reporter_name:
         return False
     patterns = [
@@ -115,7 +115,7 @@ def is_reporter_in_title(reporter_name, title):
     return any(p in title for p in patterns)
 
 def is_nhis_related(text):
-    """ 우리 회사(공단/건보) 관련 핵심 키워드가 1개 이상 들어있는지 확인 """
+    """ 공단/건보 연관성 검증 """
     return any(kw in text for kw in NHIS_CORE_KEYWORDS)
 
 def check_press_release_usage(article_text, press_list):
@@ -225,7 +225,7 @@ def analyze_article(title, summary_raw, link, press_list):
     elif "건강보험" in text or "건보" in text or "보건의료" in text:
         category = "건강보험 정책"
 
-    # 6. [조직도 기반] 공단 연관 부서/업무 정밀 매핑 (신규 키워드 추가 매핑)
+    # 6. [조직도 기반] 공단 연관 부서/업무 정밀 매핑
     department = "기획조정실 / 홍보실"
     if "통합돌봄" in text:
         department = "통합돌봄실"
@@ -239,7 +239,7 @@ def analyze_article(title, summary_raw, link, press_list):
         department = "보건의료자원실 / 기획조정실"
     elif any(k in text for k in ["약가", "신약", "약제"]):
         department = "약제관리실"
-    elif any(k in text for k in ["수가", "수가협상", "급여기획", "적정진료"]):
+    elif any(k in text for k in ["수가", "수가협상", "급여", "적정진료"]):
         department = "보험급여실 / 급여관리실"
     elif any(k in text for k in ["장기요양", "요양원", "요양급여"]):
         department = "요양기획실 / 요양급여실"
@@ -306,17 +306,17 @@ try:
             
         kw_query = build_keyword_query(raw_keywords)
         
-        # 구글 뉴스 검색어 조합
+        # [수정] 2026년 1월 1일 이후 기사 수집 범위 지정 (after:2026-01-01)
         if media and media != 'nan':
             if kw_query:
-                raw_query = f'"{media}" "{name}" {kw_query} when:1y'
+                raw_query = f'"{media}" "{name}" {kw_query} after:2026-01-01'
             else:
-                raw_query = f'"{media}" "{name}" when:1y'
+                raw_query = f'"{media}" "{name}" after:2026-01-01'
         else:
             if kw_query:
-                raw_query = f'"{name}" {kw_query} when:1y'
+                raw_query = f'"{name}" {kw_query} after:2026-01-01'
             else:
-                raw_query = f'"{name}" when:1y'
+                raw_query = f'"{name}" after:2026-01-01'
             
         print(f"\n[모니터링 대상] {media} {name} 기자")
         print(f" -> 검색 쿼리: {raw_query}")
@@ -341,7 +341,7 @@ try:
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # [필터 2] 우리 회사(공단/건보) 연관성 검증 (없으면 제외)
+            # [필터 2] 공단/건보 연관성 검증
             text_for_check = f"{entry.title} {summary_raw} {full_text if full_text else ''}"
             if not is_nhis_related(text_for_check):
                 print(f"  └ [제외: 공단/건보 무관 기사] {entry.title}")
@@ -372,9 +372,9 @@ try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
-        msg['Subject'] = f"[일일 모니터링] 정밀 검증 기사 발췌 리포트 ({len(collected_articles)}건)"
+        msg['Subject'] = f"[일일 모니터링] 2026년 기자별 기사 수집 리포트 ({len(collected_articles)}건)"
 
-        body = f"제목 기자명 제외 & 공단 연관성 검증을 통과한 기사 리포트입니다 (총 {len(collected_articles)}건):\n\n"
+        body = f"2026년 1월 이후 지정 기자별 공단 연관 기사 수집 리포트입니다 (총 {len(collected_articles)}건):\n\n"
         for idx, item in enumerate(collected_articles, 1):
             body += f"{idx}. [{item['published']}] [{item['media']} {item['reporter']} 기자]\n"
             body += f"   - 기사제목: {item['title']}\n"
