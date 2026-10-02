@@ -37,7 +37,7 @@ MIN_SENTENCE_LEN = 25        # 비교 대상 문장 최소 길이 (25자 이상)
 # 공단/건보 연관성 판별 필수 키워드
 NHIS_CORE_KEYWORDS = [
     "건보", "강청희", "건강보험", "건보료", "건보공단", "건강보험료", "장기요양", "공단", "수가", "약가", "급여",
-    "통합돌봄", "부과체계", "완납증명서", "의료비", "보건의료"
+    "통합돌봄", "부과체계", "완납증명서", "의료비", "보건의료", "상병수당"
 ]
 
 collected_articles = []
@@ -101,18 +101,6 @@ def fetch_full_text(url):
     except Exception:
         pass
     return None
-
-def is_reporter_in_title(reporter_name, title):
-    """ 제목에 기자 이름이 직접 포함된 경우 필터링 """
-    if not reporter_name:
-        return False
-    patterns = [
-        f"{reporter_name} 기자",
-        f"{reporter_name}기자",
-        f"[{reporter_name}]",
-        f"({reporter_name})"
-    ]
-    return any(p in title for p in patterns)
 
 def is_nhis_related(text):
     """ 공단/건보 연관성 검증 """
@@ -214,8 +202,8 @@ def analyze_article(title, summary_raw, link, press_list):
 
     # 5. 세부 카테고리 판별
     category = "보건복지 일반"
-    if "통합돌봄" in text or "장기요양" in text or "요양" in text:
-        category = "장기요양 / 통합돌봄"
+    if "상병수당" in text or "통합돌봄" in text or "장기요양" in text or "요양" in text:
+        category = "장기요양 / 상병수당"
     elif "부과체계" in text or "부과" in text or "재정" in text:
         category = "보험료/부과체계"
     elif "완납증명서" in text or "징수" in text or "체납" in text:
@@ -227,7 +215,9 @@ def analyze_article(title, summary_raw, link, press_list):
 
     # 6. [조직도 기반] 공단 연관 부서/업무 정밀 매핑
     department = "기획조정실 / 홍보실"
-    if "통합돌봄" in text:
+    if "상병수당" in text:
+        department = "상병수당추진단 / 급여보장실"
+    elif "통합돌봄" in text:
         department = "통합돌봄실"
     elif "부과체계" in text or any(k in text for k in ["부과", "자격", "소득정산"]):
         department = "자격부과실"
@@ -306,12 +296,12 @@ try:
             
         kw_query = build_keyword_query(raw_keywords)
         
-        # [수정] 2026년 1월 1일 이후 기사 수집 범위 지정 (after:2026-01-01)
+        # [핵심] 언론사명 큰따옴표 제거 -> 비바100 등 계열 서브 사이트 기사 누락 방지
         if media and media != 'nan':
             if kw_query:
-                raw_query = f'"{media}" "{name}" {kw_query} after:2026-01-01'
+                raw_query = f'{media} "{name}" {kw_query} after:2026-01-01'
             else:
-                raw_query = f'"{media}" "{name}" after:2026-01-01'
+                raw_query = f'{media} "{name}" after:2026-01-01'
         else:
             if kw_query:
                 raw_query = f'"{name}" {kw_query} after:2026-01-01'
@@ -331,17 +321,12 @@ try:
             published_date = format_date(entry.get('published', ''))
             summary_raw = entry.get('summary', '')
             
-            # [필터 1] 제목에 기자 이름 포함 시 제외
-            if is_reporter_in_title(name, entry.title):
-                print(f"  └ [제외: 제목에 기자명 표기] {entry.title}")
-                continue
-            
             # 기사 분석 수행
             sentiment, article_type, category, summary, department, full_text, keywords_found = analyze_article(
                 entry.title, summary_raw, entry.link, nhis_press_releases
             )
             
-            # [필터 2] 공단/건보 연관성 검증
+            # 공단/건보 연관성 검증
             text_for_check = f"{entry.title} {summary_raw} {full_text if full_text else ''}"
             if not is_nhis_related(text_for_check):
                 print(f"  └ [제외: 공단/건보 무관 기사] {entry.title}")
